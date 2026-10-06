@@ -1,4 +1,5 @@
 import { frameGameCamera } from "@/game/camera/frame-camera";
+import { createLookControls } from "@/game/camera/look-controls";
 import { CAMERA } from "@/game/config/camera";
 import { LIGHTS } from "@/game/config/presentation";
 import { useDebugEnabled } from "@/game/ui/debug";
@@ -44,6 +45,7 @@ export function GameViewport() {
     let draw = () => {};
     const scene = createGameScene(debug, () => draw());
     const camera = new PerspectiveCamera(CAMERA.fov, 1, CAMERA.near, CAMERA.far);
+    const look = createLookControls(canvas, () => draw());
 
     draw = () => {
       const width = canvas.clientWidth;
@@ -51,7 +53,13 @@ export function GameViewport() {
       if (width < 2 || height < 2) return;
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(width, height, false);
-      frameGameCamera(camera, width / height);
+      camera.aspect = width / height;
+      if (!look.hasMoved()) {
+        frameGameCamera(camera, camera.aspect);
+        look.syncFromCamera(camera);
+      } else {
+        look.apply(camera);
+      }
       renderer.render(scene, camera);
     };
 
@@ -63,6 +71,7 @@ export function GameViewport() {
 
     return () => {
       observer.disconnect();
+      look.dispose();
       scene.traverse((object) => {
         const mesh = object as Mesh;
         mesh.geometry?.dispose();

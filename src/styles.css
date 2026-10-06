@@ -32,6 +32,12 @@
   height: 100%;
   display: block;
   outline: none;
+  cursor: grab;
+  touch-action: none;
+}
+
+.game-shell canvas.is-looking {
+  cursor: grabbing;
 }
 
 .sr-only {
