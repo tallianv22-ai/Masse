@@ -1,10 +1,10 @@
 /**
  * Static files are served from `public/`.
- * The table model lives at public/Models/Tables/Ogtable.glb
- * (URL keeps that casing — the dev server is case-sensitive).
+ * Paths keep the casing and spaces used in the repository.
  */
 export const ASSET_PATHS = {
   modelsDir: "/Models/",
   texturesDir: "/assets/textures/",
   bumperPoolTable: "/Models/Tables/Ogtable.glb",
+  walls: "/Models/Walls/4 walls mesh.glb",
 } as const;

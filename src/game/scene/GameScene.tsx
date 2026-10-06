@@ -10,7 +10,7 @@ export function createGameScene(debug: boolean, onTableReady?: () => void) {
   const scene = new Scene();
   scene.background = new Color(COLORS.background);
   scene.add(createLights());
-  scene.add(createRoom());
+  scene.add(createRoom(onTableReady));
   scene.add(createTable(onTableReady));
   if (debug) scene.add(createDebugMarkers());
   return scene;
