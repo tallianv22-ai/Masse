@@ -6,12 +6,12 @@ import { createDebugMarkers } from "./DebugMarkers";
 import { createLights } from "./Lights";
 
 /** Presentation only. Gameplay systems are not mounted in Phase 1. */
-export function createGameScene(debug: boolean) {
+export function createGameScene(debug: boolean, onTableReady?: () => void) {
   const scene = new Scene();
   scene.background = new Color(COLORS.background);
   scene.add(createLights());
   scene.add(createRoom());
-  scene.add(createTable());
+  scene.add(createTable(onTableReady));
   if (debug) scene.add(createDebugMarkers());
   return scene;
 }

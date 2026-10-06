@@ -6,22 +6,24 @@ import { WORLD } from "./world";
  * instead of hard-coded sizes. If the final model differs, change
  * the numbers here — do not scatter replacements through the scene.
  *
- * The playing surface is a horizontal disc. Its center is
- * (centerX, playingSurfaceY, centerZ) = (0, playingSurfaceY, 0).
+ * Ogtable.glb is about 1 m across and 0.228 m tall, with the felt near y = 0.20
+ * in the file. It is scaled to `outerDiameter` (playing radius + rim).
+ * playingSurfaceY 0.64 and rimAboveSurface 0.09 are that felt and rail
+ * after the fit. Change the radius here if the real table should be larger.
  */
 export const TABLE = {
   centerX: WORLD.origin.x,
   centerZ: WORLD.origin.z,
   /** World Y of the top of the felt — the plane balls will rest on. */
-  playingSurfaceY: 0.78,
+  playingSurfaceY: 0.64,
   /** Radius of the circular playing surface. */
   playingRadius: 1.5,
   /** Thickness of the playing-surface slab. */
   playingThickness: 0.05,
   /** How far the outer rim extends past the playing radius. */
   rimWidth: 0.1,
-  /** How far the rim rises above the felt. */
-  rimAboveSurface: 0.04,
+  /** How far the rim rises above the felt. Measured on the fitted Ogtable.glb. */
+  rimAboveSurface: 0.09,
   /** How far the rim continues below the underside of the felt slab. */
   rimBelowSlab: 0.02,
   /** Low circular foot sitting on the floor. */

@@ -15,8 +15,8 @@ function buildFramingPoints() {
   const points: Vector3[] = [];
   const rings = [
     { y: TABLE_LAYOUT.rimTopY, radius: TABLE_LAYOUT.outerRadius },
-    { y: TABLE_LAYOUT.rimBottomY, radius: TABLE_LAYOUT.outerRadius },
-    { y: 0, radius: TABLE.baseRadius },
+    { y: TABLE.playingSurfaceY, radius: TABLE_LAYOUT.outerRadius },
+    { y: 0, radius: TABLE_LAYOUT.outerRadius },
   ];
   const samples = 24;
   for (const ring of rings) {

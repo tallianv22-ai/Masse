@@ -41,10 +41,11 @@ export function GameViewport() {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = PCFShadowMap;
 
-    const scene = createGameScene(debug);
+    let draw = () => {};
+    const scene = createGameScene(debug, () => draw());
     const camera = new PerspectiveCamera(CAMERA.fov, 1, CAMERA.near, CAMERA.far);
 
-    const draw = () => {
+    draw = () => {
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       if (width < 2 || height < 2) return;
