@@ -1,25 +1,25 @@
 import { CAMERA } from "@/game/config/camera";
 import { ROOM_LAYOUT } from "@/game/config/room";
-import { MathUtils, PerspectiveCamera, Vector3 } from "three";
+import { MathUtils, PerspectiveCamera, Spherical, Vector3 } from "three";
 import { publishCameraPose } from "./camera-pose";
 
 /**
- * Phone controls, one job per gesture:
- * one finger slides, and the room sticks to it.
- * Two fingers pinch to zoom, drag up or down to tilt, or drag sideways to turn.
- * The gesture locks onto whichever motion you start, so a pinch does not also spin the room.
- * Double-tap returns to the table. Nothing keeps moving after you let go.
+ * One finger slides the room, stuck to the finger.
+ * Two fingers tilt, turn, and pinch-zoom together.
+ * The view eases with the finger, then settles. It does not flick.
  */
 
-const PITCH_MIN = -0.95;
-const PITCH_MAX = 1.05;
-const FOV_MIN = 22;
-const FOV_MAX = 68;
+const PHI_MIN = 0.28;
+const PHI_MAX = 1.48;
+const RADIUS_MIN = 2.05;
+const RADIUS_MAX = 10.5;
 
-const _dir = new Vector3();
-const _aim = new Vector3();
-const _right = new Vector3();
-const _forward = new Vector3();
+const spherical = new Spherical();
+const sphericalDelta = new Spherical();
+const target = new Vector3();
+const panOffset = new Vector3();
+const _offset = new Vector3();
+const _axis = new Vector3();
 
 type Pinch = { dist: number; x: number; y: number };
 
@@ -38,98 +38,150 @@ function pinchOf(points: Map<number, { x: number; y: number }>): Pinch | null {
 export function createLookControls(canvas: HTMLCanvasElement, onChange: () => void) {
   let ready = false;
   let moved = false;
-  const eye = new Vector3();
-  let eyeY = 1.6;
-  let yaw = 0;
-  let pitch = 0;
-  let fov: number = CAMERA.fov;
+  let scale = 1;
+  let raf = 0;
+  let camera: PerspectiveCamera | null = null;
+  let pendingX = 0;
+  let pendingY = 0;
 
   const pointers = new Map<number, { x: number; y: number }>();
   let pinch: Pinch | null = null;
   let dragId: number | null = null;
-  let dragLooks = false;
+  let dragTurns = false;
   let lastX = 0;
   let lastY = 0;
   let travel = 0;
   let lastTap = 0;
-  let twoMode: "pending" | "zoom" | "turn" | "tilt" = "pending";
 
   const held = { left: false, right: false, up: false, down: false };
-  let keyFrame = 0;
 
-  function changed() {
-    moved = true;
-    onChange();
-  }
-
-  function readView(camera: PerspectiveCamera) {
-    _dir.set(0, 0, -1).applyQuaternion(camera.quaternion);
-    yaw = Math.atan2(_dir.x, _dir.z);
-    pitch = Math.asin(MathUtils.clamp(_dir.y, -1, 1));
-  }
-
-  function setBasis(camera: PerspectiveCamera) {
-    eye.copy(camera.position);
-    eyeY = camera.position.y;
-    readView(camera);
-    fov = camera.fov;
+  function setBasis(next: PerspectiveCamera) {
+    camera = next;
+    target.set(CAMERA.target[0], CAMERA.target[1], CAMERA.target[2]);
+    spherical.setFromVector3(_offset.copy(next.position).sub(target));
+    sphericalDelta.set(0, 0, 0);
+    panOffset.set(0, 0, 0);
+    pendingX = 0;
+    pendingY = 0;
+    scale = 1;
     ready = true;
   }
 
-  function clampEye() {
-    const margin = 1.15;
+  function clampTarget() {
+    const margin = 1.4;
     const limitX = ROOM_LAYOUT.innerWidth / 2 - margin;
     const limitZ = ROOM_LAYOUT.innerDepth / 2 - margin;
-    eye.x = MathUtils.clamp(eye.x, -limitX, limitX);
-    eye.z = MathUtils.clamp(eye.z, -limitZ, limitZ);
-    eye.y = MathUtils.clamp(eyeY, 0.85, ROOM_LAYOUT.height - 0.45);
+    const x = MathUtils.clamp(target.x, -limitX, limitX);
+    const y = MathUtils.clamp(target.y, 0.2, ROOM_LAYOUT.height - 0.7);
+    const z = MathUtils.clamp(target.z, -limitZ, limitZ);
+    if (x !== target.x) panOffset.x = 0;
+    if (y !== target.y) panOffset.y = 0;
+    if (z !== target.z) panOffset.z = 0;
+    target.set(x, y, z);
   }
 
-  function headingAxes() {
-    const cp = Math.cos(pitch);
-    _forward.set(Math.sin(yaw) * cp, 0, Math.cos(yaw) * cp);
-    if (_forward.lengthSq() < 1e-8) _forward.set(0, 0, 1);
-    _forward.normalize();
-    _right.set(_forward.z, 0, -_forward.x);
-  }
-
-  function apply(camera: PerspectiveCamera) {
-    if (!ready) return;
-    clampEye();
-    const cp = Math.cos(pitch);
-    _dir.set(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp);
-    camera.position.copy(eye);
-    _aim.copy(eye).add(_dir);
+  function place() {
+    if (!camera) return;
+    _offset.setFromSpherical(spherical);
+    camera.position.copy(target).add(_offset);
+    const margin = 0.85;
+    const limitX = ROOM_LAYOUT.innerWidth / 2 - margin;
+    const limitZ = ROOM_LAYOUT.innerDepth / 2 - margin;
+    camera.position.x = MathUtils.clamp(camera.position.x, -limitX, limitX);
+    camera.position.z = MathUtils.clamp(camera.position.z, -limitZ, limitZ);
+    camera.position.y = MathUtils.clamp(camera.position.y, 0.35, ROOM_LAYOUT.height - 0.3);
     camera.up.set(0, 1, 0);
-    camera.lookAt(_aim);
-    camera.fov = fov;
-    camera.updateProjectionMatrix();
+    camera.lookAt(target);
+    camera.updateMatrixWorld();
     publishCameraPose({
       position: [camera.position.x, camera.position.y, camera.position.z],
-      target: [_aim.x, _aim.y, _aim.z],
+      target: [target.x, target.y, target.z],
       fov: camera.fov,
     });
   }
 
-  function slideByPixels(dx: number, dy: number) {
-    if (!ready) return;
-    headingAxes();
-    const unit = Math.max(Math.min(canvas.clientWidth, canvas.clientHeight), 1);
-    const k = (Math.min(ROOM_LAYOUT.innerWidth, ROOM_LAYOUT.innerDepth) * 0.55) / unit;
-    eye.addScaledVector(_right, -dx * k);
-    eye.addScaledVector(_forward, dy * k);
-    eye.y = eyeY;
+  function flushPan() {
+    if (!camera || (pendingX === 0 && pendingY === 0)) return;
+    _offset.copy(camera.position).sub(target);
+    const dist = _offset.length() * Math.tan((camera.fov / 2) * Math.PI / 180);
+    const height = Math.max(canvas.clientHeight, 1);
+    const panX = (2 * pendingX * dist) / height;
+    const panY = (2 * pendingY * dist) / height;
+    _axis.setFromMatrixColumn(camera.matrix, 0).multiplyScalar(-panX);
+    panOffset.add(_axis);
+    _axis.setFromMatrixColumn(camera.matrix, 1).multiplyScalar(panY);
+    panOffset.add(_axis);
+    pendingX = 0;
+    pendingY = 0;
   }
 
-  function lookByPixels(dx: number, dy: number) {
-    if (!ready) return;
-    yaw -= dx * 0.0072;
-    pitch = MathUtils.clamp(pitch + dy * 0.0054, PITCH_MIN, PITCH_MAX);
+  function energy() {
+    return (
+      Math.abs(sphericalDelta.theta) > 1e-4 ||
+      Math.abs(sphericalDelta.phi) > 1e-4 ||
+      panOffset.lengthSq() > 1e-6 ||
+      pendingX !== 0 ||
+      pendingY !== 0 ||
+      Math.abs(scale - 1) > 1e-4 ||
+      held.left ||
+      held.right ||
+      held.up ||
+      held.down
+    );
   }
 
-  function zoomBy(factor: number) {
-    if (!ready || !Number.isFinite(factor) || factor <= 0) return;
-    fov = MathUtils.clamp(fov / factor, FOV_MIN, FOV_MAX);
+  function integrate() {
+    flushPan();
+    if (held.left) sphericalDelta.theta += 0.012;
+    if (held.right) sphericalDelta.theta -= 0.012;
+    if (held.up) sphericalDelta.phi -= 0.008;
+    if (held.down) sphericalDelta.phi += 0.008;
+
+    spherical.theta += sphericalDelta.theta * 0.42;
+    spherical.phi += sphericalDelta.phi * 0.42;
+    const phi = MathUtils.clamp(spherical.phi, PHI_MIN, PHI_MAX);
+    if (phi !== spherical.phi) sphericalDelta.phi = 0;
+    spherical.phi = phi;
+    spherical.makeSafe();
+
+    target.add(panOffset);
+    panOffset.set(0, 0, 0);
+    clampTarget();
+
+    const nextRadius = MathUtils.clamp(spherical.radius * scale, RADIUS_MIN, RADIUS_MAX);
+    if (nextRadius === RADIUS_MIN || nextRadius === RADIUS_MAX) scale = 1;
+    spherical.radius = nextRadius;
+    scale = 1;
+
+    sphericalDelta.theta *= 0.58;
+    sphericalDelta.phi *= 0.58;
+  }
+
+  function kick() {
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      if (!ready) return;
+      integrate();
+      moved = true;
+      onChange();
+      if (energy()) kick();
+    });
+  }
+
+  function nudge() {
+    if (!ready) return;
+    integrate();
+    moved = true;
+    onChange();
+    if (energy()) kick();
+  }
+
+  function turn(dx: number, dy: number) {
+    const height = Math.max(canvas.clientHeight, 1);
+    const speed = (Math.PI * 1.15) / height;
+    sphericalDelta.theta -= dx * speed;
+    sphericalDelta.phi -= dy * speed;
   }
 
   function onPointerDown(event: PointerEvent) {
@@ -144,42 +196,30 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     }
     if (pointers.size >= 2) {
       dragId = null;
-      dragLooks = false;
-      twoMode = "pending";
       pinch = pinchOf(pointers);
       travel = 99;
       return;
     }
     dragId = event.pointerId;
-    dragLooks = event.button === 2;
+    dragTurns = event.button === 2;
     lastX = event.clientX;
     lastY = event.clientY;
     travel = 0;
   }
 
   function onPointerMove(event: PointerEvent) {
-    if (!pointers.has(event.pointerId)) return;
+    if (!ready || !pointers.has(event.pointerId)) return;
+    if (event.cancelable) event.preventDefault();
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     if (pointers.size >= 2 && pinch) {
       const next = pinchOf(pointers);
       if (!next || pinch.dist < 8) return;
-      const dx = next.x - pinch.x;
-      const dy = next.y - pinch.y;
-      const adx = Math.abs(dx);
-      const ady = Math.abs(dy);
-      const grow = Math.abs(next.dist - pinch.dist);
-      if (twoMode === "pending") {
-        if (grow < 10 && adx < 8 && ady < 8) return;
-        if (grow > adx * 1.2 && grow > ady * 1.2) twoMode = "zoom";
-        else if (ady > adx) twoMode = "tilt";
-        else twoMode = "turn";
-      }
-      if (twoMode === "zoom") zoomBy(next.dist / pinch.dist);
-      else if (twoMode === "tilt") lookByPixels(0, dy);
-      else lookByPixels(dx, 0);
+      const dolly = next.dist / pinch.dist;
+      if (dolly > 0 && Math.abs(dolly - 1) > 0.001) scale /= dolly;
+      turn(next.x - pinch.x, next.y - pinch.y);
       pinch = next;
-      changed();
+      nudge();
       return;
     }
 
@@ -190,35 +230,41 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     lastY = event.clientY;
     if (dx === 0 && dy === 0) return;
     travel += Math.hypot(dx, dy);
-    if (!dragLooks && travel < 8) return;
-    if (dragLooks) lookByPixels(dx, dy);
-    else slideByPixels(dx, dy);
-    changed();
+    if (travel < 5 && !dragTurns) return;
+    if (dragTurns) turn(dx, dy);
+    else {
+      pendingX += dx;
+      pendingY += dy;
+    }
+    nudge();
   }
 
   function onPointerUp(event: PointerEvent) {
     pointers.delete(event.pointerId);
     if (pointers.size === 1) {
       pinch = null;
-      twoMode = "pending";
       const [id, point] = [...pointers.entries()][0];
       dragId = id;
-      dragLooks = false;
+      dragTurns = false;
       lastX = point.x;
       lastY = point.y;
       travel = 0;
     } else {
       const tapped = travel < 12;
       pinch = null;
-      twoMode = "pending";
       dragId = null;
-      dragLooks = false;
+      dragTurns = false;
       canvas.classList.remove("is-looking");
       if (tapped) {
         const now = performance.now();
         if (now - lastTap < 320) {
           moved = false;
           lastTap = 0;
+          sphericalDelta.set(0, 0, 0);
+          panOffset.set(0, 0, 0);
+          pendingX = 0;
+          pendingY = 0;
+          scale = 1;
           onChange();
         } else {
           lastTap = now;
@@ -236,41 +282,12 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
 
   function onWheel(event: WheelEvent) {
     event.preventDefault();
-    zoomBy(Math.exp(-event.deltaY * 0.0015));
-    changed();
+    scale *= Math.exp(event.deltaY * 0.0011);
+    nudge();
   }
 
   function onContextMenu(event: Event) {
     event.preventDefault();
-  }
-
-  function pumpKeys() {
-    keyFrame = 0;
-    if (!ready) return;
-    let active = false;
-    if (held.left) {
-      yaw -= 0.02;
-      active = true;
-    }
-    if (held.right) {
-      yaw += 0.02;
-      active = true;
-    }
-    if (held.up) {
-      pitch = Math.min(PITCH_MAX, pitch + 0.016);
-      active = true;
-    }
-    if (held.down) {
-      pitch = Math.max(PITCH_MIN, pitch - 0.016);
-      active = true;
-    }
-    if (!active) return;
-    changed();
-    keyFrame = requestAnimationFrame(pumpKeys);
-  }
-
-  function kickKeys() {
-    if (!keyFrame) keyFrame = requestAnimationFrame(pumpKeys);
   }
 
   function onKeyDown(event: KeyboardEvent) {
@@ -281,7 +298,7 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     else if (event.key === "ArrowDown") held.down = true;
     else return;
     event.preventDefault();
-    kickKeys();
+    nudge();
   }
 
   function onKeyUp(event: KeyboardEvent) {
@@ -292,7 +309,7 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
   }
 
   canvas.addEventListener("pointerdown", onPointerDown);
-  canvas.addEventListener("pointermove", onPointerMove);
+  canvas.addEventListener("pointermove", onPointerMove, { passive: false });
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", onPointerUp);
   canvas.addEventListener("wheel", onWheel, { passive: false });
@@ -303,9 +320,13 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
   return {
     hasMoved: () => moved,
     setBasis,
-    apply,
+    apply(next: PerspectiveCamera) {
+      camera = next;
+      if (!ready) return;
+      place();
+    },
     dispose() {
-      if (keyFrame) cancelAnimationFrame(keyFrame);
+      if (raf) cancelAnimationFrame(raf);
       canvas.classList.remove("is-looking");
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
