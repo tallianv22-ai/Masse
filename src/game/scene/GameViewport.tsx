@@ -56,10 +56,9 @@ export function GameViewport() {
       camera.aspect = width / height;
       if (!look.hasMoved()) {
         frameGameCamera(camera, camera.aspect);
-        look.syncFromCamera(camera);
-      } else {
-        look.apply(camera);
+        look.setBasis(camera);
       }
+      look.apply(camera);
       renderer.render(scene, camera);
     };
 
