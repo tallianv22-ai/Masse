@@ -1,30 +1,26 @@
 import { CAMERA } from "@/game/config/camera";
 import { ROOM_LAYOUT } from "@/game/config/room";
-import { MathUtils, PerspectiveCamera, Spherical, Vector3 } from "three";
+import { MathUtils, PerspectiveCamera, Vector3 } from "three";
 import { publishCameraPose } from "./camera-pose";
 
 /**
- * One finger slides the view across the floor.
- * Two fingers tilt, zoom, and rotate together.
- * The motion is 1:1 with the fingers — no flick.
+ * One finger slides across the floor. The room sticks to that finger.
+ * Two fingers look around: drag sideways to turn, up or down to tilt,
+ * pinch to zoom. A right-drag does the same look on a mouse.
+ * Nothing keeps moving after you let go.
  */
 
-const PHI_MIN = 0.3;
-const PHI_MAX = 1.22;
-const ZOOM_MIN = 0.4;
-const ZOOM_MAX = 1.35;
+const PITCH_MIN = -0.95;
+const PITCH_MAX = 1.05;
+const FOV_MIN = 22;
+const FOV_MAX = 68;
 
-const baseTarget = new Vector3();
-const target = new Vector3();
-const nextPos = new Vector3();
-const look = new Vector3();
-const camRight = new Vector3();
-const camUp = new Vector3();
-const pan = new Vector3();
-const worldUp = new Vector3(0, 1, 0);
-const sph = new Spherical();
+const _dir = new Vector3();
+const _aim = new Vector3();
+const _right = new Vector3();
+const _forward = new Vector3();
 
-type Pinch = { dist: number; x: number; y: number; angle: number };
+type Pinch = { dist: number; x: number; y: number };
 
 function pinchOf(points: Map<number, { x: number; y: number }>): Pinch | null {
   const pts = [...points.values()];
@@ -35,132 +31,104 @@ function pinchOf(points: Map<number, { x: number; y: number }>): Pinch | null {
     dist: Math.hypot(a.x - b.x, a.y - b.y),
     x: (a.x + b.x) / 2,
     y: (a.y + b.y) / 2,
-    angle: Math.atan2(b.y - a.y, b.x - a.x),
   };
-}
-
-function wrapAngle(a: number) {
-  while (a > Math.PI) a -= Math.PI * 2;
-  while (a < -Math.PI) a += Math.PI * 2;
-  return a;
-}
-
-function frameSpherical(dist: number, baseTheta: number, basePhi: number, yaw: number, pitch: number, zoom: number) {
-  sph.theta = baseTheta + yaw;
-  sph.phi = Math.min(PHI_MAX, Math.max(PHI_MIN, basePhi + pitch));
-  sph.radius = dist * zoom;
-}
-
-function keepInsideRoom(p: Vector3) {
-  const maxR = ROOM_LAYOUT.innerDepth / 2 - 1.15;
-  const horiz = Math.hypot(p.x, p.z);
-  if (horiz > maxR) {
-    const k = maxR / horiz;
-    p.x *= k;
-    p.z *= k;
-  }
-  p.y = MathUtils.clamp(p.y, 0.4, ROOM_LAYOUT.height - 0.35);
 }
 
 export function createLookControls(canvas: HTMLCanvasElement, onChange: () => void) {
   let ready = false;
   let moved = false;
-  let dist = 1;
-  let fov: number = CAMERA.fov;
-  let baseTheta = 0;
-  let basePhi = 0.8;
-  let zoom = 1;
+  const eye = new Vector3();
+  let eyeY = 1.6;
   let yaw = 0;
   let pitch = 0;
+  let fov: number = CAMERA.fov;
 
   const pointers = new Map<number, { x: number; y: number }>();
   let pinch: Pinch | null = null;
   let dragId: number | null = null;
+  let dragLooks = false;
   let lastX = 0;
   let lastY = 0;
+
+  const held = { left: false, right: false, up: false, down: false };
+  let keyFrame = 0;
 
   function changed() {
     moved = true;
     onChange();
   }
 
+  function readView(camera: PerspectiveCamera) {
+    _dir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    yaw = Math.atan2(_dir.x, _dir.z);
+    pitch = Math.asin(MathUtils.clamp(_dir.y, -1, 1));
+  }
+
   function setBasis(camera: PerspectiveCamera) {
-    baseTarget.set(CAMERA.target[0], CAMERA.target[1], CAMERA.target[2]);
-    sph.setFromVector3(camera.position.clone().sub(baseTarget));
-    dist = Math.max(sph.radius, 0.05);
-    baseTheta = sph.theta;
-    basePhi = sph.phi;
+    eye.copy(camera.position);
+    eyeY = camera.position.y;
+    readView(camera);
     fov = camera.fov;
-    yaw = 0;
-    pitch = 0;
-    zoom = 1;
-    pan.set(0, 0, 0);
     ready = true;
+  }
+
+  function clampEye() {
+    const margin = 1.15;
+    const limitX = ROOM_LAYOUT.innerWidth / 2 - margin;
+    const limitZ = ROOM_LAYOUT.innerDepth / 2 - margin;
+    eye.x = MathUtils.clamp(eye.x, -limitX, limitX);
+    eye.z = MathUtils.clamp(eye.z, -limitZ, limitZ);
+    eye.y = MathUtils.clamp(eyeY, 0.85, ROOM_LAYOUT.height - 0.45);
+  }
+
+  function headingAxes() {
+    const cp = Math.cos(pitch);
+    _forward.set(Math.sin(yaw) * cp, 0, Math.cos(yaw) * cp);
+    if (_forward.lengthSq() < 1e-8) _forward.set(0, 0, 1);
+    _forward.normalize();
+    _right.set(_forward.z, 0, -_forward.x);
   }
 
   function apply(camera: PerspectiveCamera) {
     if (!ready) return;
-    frameSpherical(dist, baseTheta, basePhi, yaw, pitch, zoom);
-    target.copy(baseTarget).add(pan);
-    nextPos.setFromSpherical(sph).add(target);
-    keepInsideRoom(nextPos);
-    camera.position.copy(nextPos);
+    clampEye();
+    const cp = Math.cos(pitch);
+    _dir.set(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp);
+    camera.position.copy(eye);
+    _aim.copy(eye).add(_dir);
     camera.up.set(0, 1, 0);
-    camera.lookAt(target);
+    camera.lookAt(_aim);
     camera.fov = fov;
     camera.updateProjectionMatrix();
     publishCameraPose({
       position: [camera.position.x, camera.position.y, camera.position.z],
-      target: [target.x, target.y, target.z],
+      target: [_aim.x, _aim.y, _aim.z],
       fov: camera.fov,
     });
   }
 
-  function viewAxes() {
-    frameSpherical(dist, baseTheta, basePhi, yaw, pitch, zoom);
-    nextPos.setFromSpherical(sph);
-    look.copy(nextPos).negate().normalize();
-    camRight.crossVectors(look, worldUp);
-    if (camRight.lengthSq() < 1e-8) camRight.set(1, 0, 0);
-    camRight.normalize();
-    camUp.crossVectors(camRight, look).normalize();
-  }
-
-  function slideByPixels(dx: number, dy: number, viewHeightPx: number) {
+  function slideByPixels(dx: number, dy: number) {
     if (!ready) return;
-    viewAxes();
-    const worldH = 2 * sph.radius * Math.tan((fov * Math.PI) / 360);
-    const k = worldH / Math.max(viewHeightPx, 1);
-    const right = camRight.clone();
-    right.y = 0;
-    if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
-    right.normalize();
-    const forward = look.clone();
-    forward.y = 0;
-    if (forward.lengthSq() < 1e-8) forward.set(0, 0, -1);
-    forward.normalize();
-    pan.addScaledVector(right, -dx * k);
-    pan.addScaledVector(forward, dy * k);
-    pan.y = 0;
-    const limitX = ROOM_LAYOUT.innerWidth / 2 - 2.4;
-    const limitZ = ROOM_LAYOUT.innerDepth / 2 - 2.4;
-    pan.x = MathUtils.clamp(pan.x, -limitX, limitX);
-    pan.z = MathUtils.clamp(pan.z, -limitZ, limitZ);
+    headingAxes();
+    const span = Math.min(ROOM_LAYOUT.innerWidth, ROOM_LAYOUT.innerDepth) * 0.62;
+    const view = Math.max(canvas.clientHeight, 1);
+    const k = span / view;
+    eye.addScaledVector(_right, -dx * k);
+    eye.addScaledVector(_forward, dy * k);
+    eye.y = eyeY;
   }
 
-  function tiltByPixels(dy: number, viewHeightPx: number) {
+  function lookByPixels(dx: number, dy: number) {
     if (!ready) return;
-    pitch = MathUtils.clamp(pitch + (dy / Math.max(viewHeightPx, 1)) * 1.15, PHI_MIN - basePhi, PHI_MAX - basePhi);
-  }
-
-  function turnByAngle(dAngle: number) {
-    if (!ready || !Number.isFinite(dAngle)) return;
-    yaw -= dAngle;
+    const viewW = Math.max(canvas.clientWidth, 1);
+    const viewH = Math.max(canvas.clientHeight, 1);
+    yaw -= (dx / viewW) * Math.PI * 1.35;
+    pitch = MathUtils.clamp(pitch + (dy / viewH) * (PITCH_MAX - PITCH_MIN), PITCH_MIN, PITCH_MAX);
   }
 
   function zoomBy(factor: number) {
     if (!ready || !Number.isFinite(factor) || factor <= 0) return;
-    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom / factor));
+    fov = MathUtils.clamp(fov / factor, FOV_MIN, FOV_MAX);
   }
 
   function onPointerDown(event: PointerEvent) {
@@ -175,10 +143,12 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     }
     if (pointers.size >= 2) {
       dragId = null;
+      dragLooks = false;
       pinch = pinchOf(pointers);
       return;
     }
     dragId = event.pointerId;
+    dragLooks = event.button === 2;
     lastX = event.clientX;
     lastY = event.clientY;
   }
@@ -186,17 +156,16 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
   function onPointerMove(event: PointerEvent) {
     if (!pointers.has(event.pointerId)) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    const viewH = canvas.clientHeight || 1;
 
     if (pointers.size >= 2 && pinch) {
       const next = pinchOf(pointers);
-      if (next && pinch.dist > 8) {
-        zoomBy(next.dist / pinch.dist);
-        tiltByPixels(next.y - pinch.y, viewH);
-        turnByAngle(wrapAngle(next.angle - pinch.angle));
-        pinch = next;
-        changed();
-      }
+      if (!next || pinch.dist < 8) return;
+      const dx = next.x - pinch.x;
+      const dy = next.y - pinch.y;
+      if (dx !== 0 || dy !== 0) lookByPixels(dx, dy);
+      zoomBy(next.dist / pinch.dist);
+      pinch = next;
+      changed();
       return;
     }
 
@@ -206,7 +175,8 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     lastX = event.clientX;
     lastY = event.clientY;
     if (dx === 0 && dy === 0) return;
-    slideByPixels(dx, dy, viewH);
+    if (dragLooks) lookByPixels(dx, dy);
+    else slideByPixels(dx, dy);
     changed();
   }
 
@@ -216,11 +186,13 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
       pinch = null;
       const [id, point] = [...pointers.entries()][0];
       dragId = id;
+      dragLooks = false;
       lastX = point.x;
       lastY = point.y;
     } else {
       pinch = null;
       dragId = null;
+      dragLooks = false;
       canvas.classList.remove("is-looking");
     }
     try {
@@ -232,20 +204,59 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
 
   function onWheel(event: WheelEvent) {
     event.preventDefault();
-    zoomBy(Math.exp(-event.deltaY * 0.0016));
+    zoomBy(Math.exp(-event.deltaY * 0.0015));
     changed();
+  }
+
+  function onContextMenu(event: Event) {
+    event.preventDefault();
+  }
+
+  function pumpKeys() {
+    keyFrame = 0;
+    if (!ready) return;
+    let active = false;
+    if (held.left) {
+      yaw -= 0.02;
+      active = true;
+    }
+    if (held.right) {
+      yaw += 0.02;
+      active = true;
+    }
+    if (held.up) {
+      pitch = Math.min(PITCH_MAX, pitch + 0.016);
+      active = true;
+    }
+    if (held.down) {
+      pitch = Math.max(PITCH_MIN, pitch - 0.016);
+      active = true;
+    }
+    if (!active) return;
+    changed();
+    keyFrame = requestAnimationFrame(pumpKeys);
+  }
+
+  function kickKeys() {
+    if (!keyFrame) keyFrame = requestAnimationFrame(pumpKeys);
   }
 
   function onKeyDown(event: KeyboardEvent) {
     if (event.repeat) return;
-    const viewH = canvas.clientHeight || 1;
-    if (event.key === "ArrowLeft") turnByAngle(-Math.PI * 40 / viewH);
-    else if (event.key === "ArrowRight") turnByAngle(Math.PI * 40 / viewH);
-    else if (event.key === "ArrowUp") pitch = MathUtils.clamp(pitch - 0.06, PHI_MIN - basePhi, PHI_MAX - basePhi);
-    else if (event.key === "ArrowDown") pitch = MathUtils.clamp(pitch + 0.06, PHI_MIN - basePhi, PHI_MAX - basePhi);
+    if (event.key === "ArrowLeft") held.left = true;
+    else if (event.key === "ArrowRight") held.right = true;
+    else if (event.key === "ArrowUp") held.up = true;
+    else if (event.key === "ArrowDown") held.down = true;
     else return;
     event.preventDefault();
-    changed();
+    kickKeys();
+  }
+
+  function onKeyUp(event: KeyboardEvent) {
+    if (event.key === "ArrowLeft") held.left = false;
+    else if (event.key === "ArrowRight") held.right = false;
+    else if (event.key === "ArrowUp") held.up = false;
+    else if (event.key === "ArrowDown") held.down = false;
   }
 
   canvas.addEventListener("pointerdown", onPointerDown);
@@ -253,21 +264,25 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", onPointerUp);
   canvas.addEventListener("wheel", onWheel, { passive: false });
+  canvas.addEventListener("contextmenu", onContextMenu);
   window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
 
   return {
     hasMoved: () => moved,
     setBasis,
     apply,
     dispose() {
+      if (keyFrame) cancelAnimationFrame(keyFrame);
       canvas.classList.remove("is-looking");
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
     },
   };
 }
-
