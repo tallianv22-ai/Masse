@@ -4,17 +4,15 @@ import { MathUtils, PerspectiveCamera, Spherical, Vector3 } from "three";
 import { publishCameraPose } from "./camera-pose";
 
 /**
- * Same camera model as Trivium's board camera:
- * a spherical orbit around a look target, updated 1:1 with the finger.
- * No flick or inertia. Wheel and pinch use Trivium's exponential zoom.
- * Two fingers also pan and twist, the same way the board does.
+ * One finger slides the view across the floor.
+ * Two fingers tilt, zoom, and rotate together.
+ * The motion is 1:1 with the fingers — no flick.
  */
 
 const PHI_MIN = 0.3;
 const PHI_MAX = 1.22;
 const ZOOM_MIN = 0.4;
-const ZOOM_MAX = 1.2;
-const PAN = 4;
+const ZOOM_MAX = 1.35;
 
 const baseTarget = new Vector3();
 const target = new Vector3();
@@ -128,14 +126,31 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     camUp.crossVectors(camRight, look).normalize();
   }
 
-  function panByPixels(dx: number, dy: number, viewHeightPx: number) {
+  function slideByPixels(dx: number, dy: number, viewHeightPx: number) {
     if (!ready) return;
     viewAxes();
     const worldH = 2 * sph.radius * Math.tan((fov * Math.PI) / 360);
     const k = worldH / Math.max(viewHeightPx, 1);
-    pan.addScaledVector(camRight, -dx * k);
-    pan.addScaledVector(camUp, dy * k);
-    if (pan.length() > PAN) pan.setLength(PAN);
+    const right = camRight.clone();
+    right.y = 0;
+    if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+    right.normalize();
+    const forward = look.clone();
+    forward.y = 0;
+    if (forward.lengthSq() < 1e-8) forward.set(0, 0, -1);
+    forward.normalize();
+    pan.addScaledVector(right, -dx * k);
+    pan.addScaledVector(forward, dy * k);
+    pan.y = 0;
+    const limitX = ROOM_LAYOUT.innerWidth / 2 - 2.4;
+    const limitZ = ROOM_LAYOUT.innerDepth / 2 - 2.4;
+    pan.x = MathUtils.clamp(pan.x, -limitX, limitX);
+    pan.z = MathUtils.clamp(pan.z, -limitZ, limitZ);
+  }
+
+  function tiltByPixels(dy: number, viewHeightPx: number) {
+    if (!ready) return;
+    pitch = MathUtils.clamp(pitch + (dy / Math.max(viewHeightPx, 1)) * 1.15, PHI_MIN - basePhi, PHI_MAX - basePhi);
   }
 
   function turnByAngle(dAngle: number) {
@@ -177,7 +192,7 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
       const next = pinchOf(pointers);
       if (next && pinch.dist > 8) {
         zoomBy(next.dist / pinch.dist);
-        panByPixels(next.x - pinch.x, next.y - pinch.y, viewH);
+        tiltByPixels(next.y - pinch.y, viewH);
         turnByAngle(wrapAngle(next.angle - pinch.angle));
         pinch = next;
         changed();
@@ -191,16 +206,23 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     lastX = event.clientX;
     lastY = event.clientY;
     if (dx === 0 && dy === 0) return;
-    turnByAngle((dx / viewH) * Math.PI);
-    pitch = MathUtils.clamp(pitch + (dy / viewH) * 0.9, PHI_MIN - basePhi, PHI_MAX - basePhi);
+    slideByPixels(dx, dy, viewH);
     changed();
   }
 
   function onPointerUp(event: PointerEvent) {
     pointers.delete(event.pointerId);
-    if (pointers.size < 2) pinch = null;
-    if (dragId === event.pointerId) dragId = null;
-    if (pointers.size === 0) canvas.classList.remove("is-looking");
+    if (pointers.size === 1) {
+      pinch = null;
+      const [id, point] = [...pointers.entries()][0];
+      dragId = id;
+      lastX = point.x;
+      lastY = point.y;
+    } else {
+      pinch = null;
+      dragId = null;
+      canvas.classList.remove("is-looking");
+    }
     try {
       canvas.releasePointerCapture(event.pointerId);
     } catch {
