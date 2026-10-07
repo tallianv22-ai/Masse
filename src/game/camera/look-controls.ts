@@ -4,10 +4,11 @@ import { MathUtils, PerspectiveCamera, Vector3 } from "three";
 import { publishCameraPose } from "./camera-pose";
 
 /**
- * One finger slides across the floor. The room sticks to that finger.
- * Two fingers look around: drag sideways to turn, up or down to tilt,
- * pinch to zoom. A right-drag does the same look on a mouse.
- * Nothing keeps moving after you let go.
+ * Phone controls, one job per gesture:
+ * one finger slides, and the room sticks to it.
+ * Two fingers pinch to zoom, drag up or down to tilt, or drag sideways to turn.
+ * The gesture locks onto whichever motion you start, so a pinch does not also spin the room.
+ * Double-tap returns to the table. Nothing keeps moving after you let go.
  */
 
 const PITCH_MIN = -0.95;
@@ -49,6 +50,9 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
   let dragLooks = false;
   let lastX = 0;
   let lastY = 0;
+  let travel = 0;
+  let lastTap = 0;
+  let twoMode: "pending" | "zoom" | "turn" | "tilt" = "pending";
 
   const held = { left: false, right: false, up: false, down: false };
   let keyFrame = 0;
@@ -110,9 +114,8 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
   function slideByPixels(dx: number, dy: number) {
     if (!ready) return;
     headingAxes();
-    const span = Math.min(ROOM_LAYOUT.innerWidth, ROOM_LAYOUT.innerDepth) * 0.62;
-    const view = Math.max(canvas.clientHeight, 1);
-    const k = span / view;
+    const unit = Math.max(Math.min(canvas.clientWidth, canvas.clientHeight), 1);
+    const k = (Math.min(ROOM_LAYOUT.innerWidth, ROOM_LAYOUT.innerDepth) * 0.55) / unit;
     eye.addScaledVector(_right, -dx * k);
     eye.addScaledVector(_forward, dy * k);
     eye.y = eyeY;
@@ -120,10 +123,8 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
 
   function lookByPixels(dx: number, dy: number) {
     if (!ready) return;
-    const viewW = Math.max(canvas.clientWidth, 1);
-    const viewH = Math.max(canvas.clientHeight, 1);
-    yaw -= (dx / viewW) * Math.PI * 1.35;
-    pitch = MathUtils.clamp(pitch + (dy / viewH) * (PITCH_MAX - PITCH_MIN), PITCH_MIN, PITCH_MAX);
+    yaw -= dx * 0.0072;
+    pitch = MathUtils.clamp(pitch + dy * 0.0054, PITCH_MIN, PITCH_MAX);
   }
 
   function zoomBy(factor: number) {
@@ -144,13 +145,16 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     if (pointers.size >= 2) {
       dragId = null;
       dragLooks = false;
+      twoMode = "pending";
       pinch = pinchOf(pointers);
+      travel = 99;
       return;
     }
     dragId = event.pointerId;
     dragLooks = event.button === 2;
     lastX = event.clientX;
     lastY = event.clientY;
+    travel = 0;
   }
 
   function onPointerMove(event: PointerEvent) {
@@ -162,8 +166,18 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
       if (!next || pinch.dist < 8) return;
       const dx = next.x - pinch.x;
       const dy = next.y - pinch.y;
-      if (dx !== 0 || dy !== 0) lookByPixels(dx, dy);
-      zoomBy(next.dist / pinch.dist);
+      const adx = Math.abs(dx);
+      const ady = Math.abs(dy);
+      const grow = Math.abs(next.dist - pinch.dist);
+      if (twoMode === "pending") {
+        if (grow < 10 && adx < 8 && ady < 8) return;
+        if (grow > adx * 1.2 && grow > ady * 1.2) twoMode = "zoom";
+        else if (ady > adx) twoMode = "tilt";
+        else twoMode = "turn";
+      }
+      if (twoMode === "zoom") zoomBy(next.dist / pinch.dist);
+      else if (twoMode === "tilt") lookByPixels(0, dy);
+      else lookByPixels(dx, 0);
       pinch = next;
       changed();
       return;
@@ -175,6 +189,8 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     lastX = event.clientX;
     lastY = event.clientY;
     if (dx === 0 && dy === 0) return;
+    travel += Math.hypot(dx, dy);
+    if (!dragLooks && travel < 8) return;
     if (dragLooks) lookByPixels(dx, dy);
     else slideByPixels(dx, dy);
     changed();
@@ -184,16 +200,32 @@ export function createLookControls(canvas: HTMLCanvasElement, onChange: () => vo
     pointers.delete(event.pointerId);
     if (pointers.size === 1) {
       pinch = null;
+      twoMode = "pending";
       const [id, point] = [...pointers.entries()][0];
       dragId = id;
       dragLooks = false;
       lastX = point.x;
       lastY = point.y;
+      travel = 0;
     } else {
+      const tapped = travel < 12;
       pinch = null;
+      twoMode = "pending";
       dragId = null;
       dragLooks = false;
       canvas.classList.remove("is-looking");
+      if (tapped) {
+        const now = performance.now();
+        if (now - lastTap < 320) {
+          moved = false;
+          lastTap = 0;
+          onChange();
+        } else {
+          lastTap = now;
+        }
+      } else {
+        lastTap = 0;
+      }
     }
     try {
       canvas.releasePointerCapture(event.pointerId);
