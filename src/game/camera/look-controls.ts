@@ -11,8 +11,8 @@ import { publishCameraPose } from "./camera-pose";
 
 const PHI_MIN = 0.28;
 const PHI_MAX = 1.48;
-const RADIUS_MIN = 2.05;
-const RADIUS_MAX = 10.5;
+const RADIUS_MIN = 6.5;
+const RADIUS_MAX = 28;
 
 const spherical = new Spherical();
 const sphericalDelta = new Spherical();

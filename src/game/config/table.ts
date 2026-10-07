@@ -1,36 +1,31 @@
 import { WORLD } from "./world";
 
 /**
- * Placeholder table measurements, in meters.
- * Future balls, cushions, and the imported GLB should use these
- * instead of hard-coded sizes. If the final model differs, change
- * the numbers here — do not scatter replacements through the scene.
- *
- * Ogtable.glb is about 1 m across and 0.228 m tall, with the felt near y = 0.20
- * in the file. It is scaled to `outerDiameter` (playing radius + rim).
- * playingSurfaceY 0.64 and rimAboveSurface 0.09 are that felt and rail
- * after the fit. Change the radius here if the real table should be larger.
+ * Table measurements, in meters.
+ * Ogtable.glb is about 1 m across. It is scaled uniformly to `outerDiameter`.
+ * These figures are 3× the first fitted size (felt was 0.64, outer diameter 3.2).
+ * The felt height scales with the model because the file sits on the floor.
  */
 export const TABLE = {
   centerX: WORLD.origin.x,
   centerZ: WORLD.origin.z,
   /** World Y of the top of the felt — the plane balls will rest on. */
-  playingSurfaceY: 0.64,
+  playingSurfaceY: 1.92,
   /** Radius of the circular playing surface. */
-  playingRadius: 1.5,
+  playingRadius: 4.5,
   /** Thickness of the playing-surface slab. */
-  playingThickness: 0.05,
+  playingThickness: 0.15,
   /** How far the outer rim extends past the playing radius. */
-  rimWidth: 0.1,
+  rimWidth: 0.3,
   /** How far the rim rises above the felt. Measured on the fitted Ogtable.glb. */
-  rimAboveSurface: 0.09,
+  rimAboveSurface: 0.27,
   /** How far the rim continues below the underside of the felt slab. */
-  rimBelowSlab: 0.02,
+  rimBelowSlab: 0.06,
   /** Low circular foot sitting on the floor. */
-  baseRadius: 1.08,
-  baseHeight: 0.12,
+  baseRadius: 3.24,
+  baseHeight: 0.36,
   /** Column between the foot and the underside of the rim. */
-  pedestalRadius: 0.48,
+  pedestalRadius: 1.44,
 } as const;
 
 function buildTableLayout() {

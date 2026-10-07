@@ -15,8 +15,8 @@ export const CAMERA = {
   fov: 33,
   /** Widest vertical FOV used to keep the table on screen in tall viewports. */
   maxFov: 58,
-  near: 0.08,
-  far: 64,
+  near: 0.15,
+  far: 180,
   /** Look-at point: center of the playing surface. */
   target: [TABLE.centerX, TABLE.playingSurfaceY, TABLE.centerZ] as [number, number, number],
   /**
@@ -28,12 +28,12 @@ export const CAMERA = {
   /** NDC inset (0–1) kept clear around the table silhouette. */
   fitMargin: 0.08,
   /** Closest the fit is allowed to place the camera (meters from the target). */
-  minDistance: 2.6,
+  minDistance: 7.8,
   /**
-   * Farthest fit distance. Stays inside the room from `ROOM`.
-   * Narrow screens widen FOV instead of backing through a wall.
+   * Farthest fit distance. There are no walls, so the camera can back up
+   * far enough to frame the 3× table without widening the lens.
    */
-  maxDistance: 8.6,
+  maxDistance: 28,
   /** Drag-to-look. The camera stays put so it cannot pass through a wall. */
   look: {
     /** Radians per pixel. Drag moves the room with the finger. */
